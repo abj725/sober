@@ -1,79 +1,24 @@
 // app.js — SoberTrack PWA core application
 
 // ── AI Verification ──────────────────────────────────────────────────────────
+// Calls our Netlify server function — Gemini API key stays on the server,
+// never exposed to users or visible in the browser.
 const AI = {
-  GEMINI_URL: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+  VERIFY_URL: '/.netlify/functions/verify',
 
-  async verifyFrames(base64Frames, apiKey) {
-    // Concise prompt with a concrete example — gives the model no excuse to add prose
-    const prompt = `You are a medication verification assistant for a Video Observed Therapy app.
-Analyze these ${base64Frames.length} frames (sequential stills from a short recording) of a person taking Disulfiram.
-
-Respond with ONLY a single JSON object. No explanation, no markdown, no extra text whatsoever.
-
-Required JSON keys:
-- pill_visible: {result:"yes" or "no", confidence: integer 0-100}
-- ingestion_shown: {result:"yes" or "no", confidence: integer 0-100}
-- mouth_clear: {result:"yes" or "no", confidence: integer 0-100}
-- flags: array containing zero or more of: "poor_lighting","face_not_visible","no_pill_detected","possible_pre_recorded","hand_obscuring_mouth"
-- overall_pass: boolean — true only if all three results are "yes" and no critical flags present
-
-Example of the ONLY acceptable response:
-{"pill_visible":{"result":"yes","confidence":90},"ingestion_shown":{"result":"yes","confidence":85},"mouth_clear":{"result":"yes","confidence":88},"flags":[],"overall_pass":true}`;
-
-    const parts = [
-      { text: prompt },
-      ...base64Frames.map(b64 => ({
-        inline_data: { mime_type: 'image/jpeg', data: b64 }
-      }))
-    ];
-
-    const resp = await fetch(`${this.GEMINI_URL}?key=${apiKey}`, {
+  async verifyFrames(base64Frames) {
+    const resp = await fetch(this.VERIFY_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        generationConfig: {
-          temperature: 0.1,
-          maxOutputTokens: 8192,          // gemini-2.5-flash uses thinking tokens — needs headroom
-          responseMimeType: 'application/json'  // forces JSON-only output mode
-        }
-      })
+      body: JSON.stringify({ frames: base64Frames })
     });
 
     if (!resp.ok) {
-      const errText = await resp.text().catch(() => '');
-      throw new Error(`Gemini API error ${resp.status}: ${errText.slice(0, 300)}`);
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error || `Server error ${resp.status}`);
     }
 
-    const data = await resp.json();
-
-    // Collect text from all parts (thinking models may split across parts)
-    const allParts = data.candidates?.[0]?.content?.parts || [];
-    const text = allParts.map(p => p.text || '').join('').trim();
-
-    if (!text) throw new Error('Empty response from Gemini — check your API key and billing quota');
-
-    return this._parseJSON(text);
-  },
-
-  // Layered JSON extraction — handles fences, leading prose, and truncation
-  _parseJSON(raw) {
-    // 1. Direct parse (best case: responseMimeType delivered clean JSON)
-    try { return JSON.parse(raw); } catch (_) {}
-
-    // 2. Strip markdown code fences then retry
-    const stripped = raw.replace(/^```(?:json)?\s*/im, '').replace(/```\s*$/m, '').trim();
-    try { return JSON.parse(stripped); } catch (_) {}
-
-    // 3. Extract the first complete {...} block (handles prose before/after)
-    const match = stripped.match(/\{[\s\S]*\}/);
-    if (match) {
-      try { return JSON.parse(match[0]); } catch (_) {}
-    }
-
-    // 4. Give up — surface the raw text so the error message is actually useful
-    throw new Error(`Could not parse AI response. Raw text received: "${raw.slice(0, 400)}"`);
+    return resp.json();
   },
 
   extractFrameFromVideo(video, timeSeconds) {
@@ -331,19 +276,6 @@ const Screens = {
             <span>Photo sent to partner</span>
             <span class="step-check" id="check-3"></span>
           </div>
-        </div>
-
-        <!-- Gemini API key notice -->
-        <div id="api-key-notice" class="card card-blue mb-12" style="display:none">
-          <div class="label label-blue mb-8">⚙️ Gemini API key needed</div>
-          <div class="text-secondary" style="font-size:12px;margin-bottom:10px">
-            Enter your free Gemini API key to enable AI video verification. Get one at
-            <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--blue)">aistudio.google.com</a>
-          </div>
-          <div class="input-group" style="margin-bottom:8px">
-            <input class="input" type="password" id="gemini-key-input" placeholder="AIza..." />
-          </div>
-          <button class="btn btn-primary" onclick="App.saveApiKey()">Save key</button>
         </div>
 
         <!-- Record button -->
@@ -615,11 +547,7 @@ const Screens = {
                 <p>${t.desc}</p>
               </div>
             </div>`).join('')}
-          <div class="input-group mt-12">
-            <label>Gemini API key (for AI verification)</label>
-            <input class="input" type="password" id="set-api-key" value="${localStorage.getItem('st_gemini_key')||''}" placeholder="AIza...">
-            <div class="text-muted mt-4" style="font-size:11px">Get a free key at <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--blue)">aistudio.google.com</a></div>
-          </div>
+
         </div>
 
         <!-- Partner -->
@@ -683,19 +611,7 @@ const App = {
   selectedThreshold: null,
 
   async initCamera() {
-    const apiKey = localStorage.getItem('st_gemini_key');
-    if (!apiKey) {
-      document.getElementById('api-key-notice').style.display = 'block';
-    }
     // Camera starts only on button press to avoid premature permission prompts
-  },
-
-  saveApiKey() {
-    const key = document.getElementById('gemini-key-input').value.trim();
-    if (!key) { showToast('Please enter an API key'); return; }
-    localStorage.setItem('st_gemini_key', key);
-    document.getElementById('api-key-notice').style.display = 'none';
-    showToast('✓ API key saved');
   },
 
   async startCamera() {
@@ -797,7 +713,7 @@ const App = {
     video.muted = true;
     await new Promise(r => { video.onloadeddata = r; video.load(); });
 
-    // Update step 0: extracting
+    // Step 1: extract frames
     this._setStep(0, 'checking');
 
     const frames = [];
@@ -808,29 +724,16 @@ const App = {
     URL.revokeObjectURL(url);
     this._setStep(0, 'done');
 
-    // Step 1: AI analysis
+    // Step 2: AI verification via server function (no API key needed by user)
     this._setStep(1, 'checking');
-    const apiKey = localStorage.getItem('st_gemini_key');
-
     let result;
-    if (!apiKey) {
-      // Demo mode: simulate passed verification
-      await new Promise(r => setTimeout(r, 2000));
-      result = {
-        pill_visible: { result: 'yes', confidence: 91 },
-        ingestion_shown: { result: 'yes', confidence: 87 },
-        mouth_clear: { result: 'yes', confidence: 89 },
-        flags: [], overall_pass: true
-      };
-    } else {
-      try {
-        result = await AI.verifyFrames(frames, apiKey);
-      } catch(e) {
-        this._setStep(1, 'failed');
-        this._showResult(false, 'AI verification error: ' + e.message, 0);
-        this._resetBtn();
-        return;
-      }
+    try {
+      result = await AI.verifyFrames(frames);
+    } catch(e) {
+      this._setStep(1, 'failed');
+      this._showResult(false, 'AI verification error: ' + e.message, 0);
+      this._resetBtn();
+      return;
     }
 
     const s = DB.getSettings();
@@ -967,9 +870,6 @@ const App = {
   saveSettings() {
     const timeVal = document.getElementById('set-dose-time').value;
     const [h, m] = timeVal ? timeVal.split(':').map(Number) : [9, 0];
-    const apiKey = document.getElementById('set-api-key').value.trim();
-    if (apiKey) localStorage.setItem('st_gemini_key', apiKey);
-
     const s = {
       ...DB.getSettings(),
       userName: document.getElementById('set-name').value.trim(),
