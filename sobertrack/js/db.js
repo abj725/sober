@@ -269,6 +269,19 @@ const DB = {
     return { totalDays, years, months, days, startDate: startStr };
   },
 
+  // ── Store cache (for GPS screen display) ─────────────────────────────────
+  saveNearbyStores(stores) {
+    try {
+      localStorage.setItem('st_nearby_stores', JSON.stringify(stores));
+    } catch(e) {}
+  },
+
+  getNearbyStores() {
+    try {
+      return JSON.parse(localStorage.getItem('st_nearby_stores') || '[]');
+    } catch { return []; }
+  },
+
   // ── Reset ─────────────────────────────────────────────────────────────────
   resetAllData() {
     Object.values(this.KEYS).forEach(k => localStorage.removeItem(k));
@@ -276,3 +289,10 @@ const DB = {
 };
 
 window.DB = DB;
+
+// ── Store cache convenience wrapper ──────────────────────────────────────────
+const StoreCache = {
+  put(stores) { DB.saveNearbyStores(stores); },
+  get()       { return DB.getNearbyStores(); }
+};
+window.StoreCache = StoreCache;
