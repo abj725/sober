@@ -1,0 +1,3 @@
+[build]
+  publish   = "sobertrack"
+  functions = "sobertrack/netlify/functions"
